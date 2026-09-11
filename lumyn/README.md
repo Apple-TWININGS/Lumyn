@@ -146,7 +146,7 @@ print(trace_report.summary())
 
 | 文件 | 能力 | 关键 API |
 |------|------|----------|
-| `presets.py` | **4 个预设场景** | `BINARY_STAR` / `SPIRAL_GALAXY` / `GLOBULAR_CLUSTER` / `GALAXY_COLLISION` |
+| `presets.py` | **4 个预设场景** | `binary_star()` / `spiral_galaxy()` / `globular_cluster()` / `galaxy_collision()`，另有 `get(name)` 按名取用 |
 | `export.py` | 轨迹导出 | `to_csv()`（必测）/ `to_fits()`（需 astropy，可选） |
 | `visualization.py` | 科研级渲染 | `render_3d()` / `render_2d_with_physics()`（叠加能量·角动量曲线） |
 | `teaching.py` | 参数对比教学 | `compare_mass()` / `compare_angular_velocity()` |
