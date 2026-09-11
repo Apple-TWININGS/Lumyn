@@ -110,24 +110,58 @@ class BarnesHutTree:
                 continue
             pi = pos[idx]
             mj = mass[idx]
-            d = pi[:, None, :] - pos[idx][None, :, :]   # (K,K,3)
+            # d[i,j] = r_j - r_i, i.e. pointing from i TOWARD j.
+            # The opposite order (r_i - r_j) makes gravity repulsive, which is
+            # also inconsistent with the far-field term below, where
+            # (cell.com - pos) is attractive. Verified by
+            # scripts/audit_force_sign.py and scripts/verify_lumyn_physics.py.
+            d = pos[idx][None, :, :] - pi[:, None, :]   # (K,K,3)
             r2 = (d * d).sum(axis=2) + 1e-8
             inv_r3 = r2 ** (-1.5)
             np.fill_diagonal(inv_r3, 0.0)
             acc[idx] = (mj[None, :, None] * d * inv_r3[:, :, None]).sum(axis=1)
 
         # 远场：内部节点 COM 作用于「非子树」粒子
+        #
+        # 叶子也必须能作为源。原实现在这里 `if not cell.children: continue`，
+        # 于是跨叶粒子对既不在近场（近场只做叶内精确成对），也不在远场（叶子被
+        # 跳过），它们的力被**静默丢弃**。两颗粒子永远同叶（max_leaf=16）所以双体
+        # 轨道看起来是对的，而 N=200 的云误差约 90%，星系核心这类"近但在不同叶"
+        # 的区域受创最重。
+        #
+        # 正确做法（标准 Barnes-Hut 遍历）：
+        #   判据通过      -> 用 COM 单极近似
+        #   判据不通过且是内部节点 -> 递归到子节点（下面的循环会自然覆盖子节点）
+        #   判据不通过且是叶子     -> 对该叶精确求和
         for cell in self._cells:
-            if not cell.children:
-                continue
             diff_all = cell.com - pos                       # (N,3)
             dist_all = np.sqrt((diff_all * diff_all).sum(axis=1) + 1e-16)
-            mask = (2.0 * cell.half / np.maximum(dist_all, 1e-8)) < theta
-            sub_leaves = self._subtree_leaf_list(cell.cid)
-            if sub_leaves:
-                mask &= ~np.isin(leaf_of, sub_leaves)
-            inv_r3 = dist_all ** (-3)
-            acc += (cell.total_mass * diff_all * inv_r3[:, None]) * mask[:, None].astype(np.float64)
+            near = (2.0 * cell.half / np.maximum(dist_all, 1e-8)) < theta
+
+            if cell.children:
+                sub_leaves = self._subtree_leaf_list(cell.cid)
+                mask = near.copy()
+                if sub_leaves:
+                    mask &= ~np.isin(leaf_of, sub_leaves)
+                inv_r3 = dist_all ** (-3)
+                acc += (cell.total_mass * diff_all * inv_r3[:, None]) * mask[:, None].astype(np.float64)
+            else:
+                # leaf: approximate with its COM where allowed, else sum exactly
+                idx = cell.indices
+                mj = mass[idx]
+                self_mask = leaf_of == cell.cid
+                mask = near & ~self_mask
+                inv_r3 = dist_all ** (-3)
+                acc += (cell.total_mass * diff_all * inv_r3[:, None]) * mask[:, None].astype(np.float64)
+
+                need = (~near) & (~self_mask)
+                if np.any(need):
+                    rows = np.where(need)[0]
+                    pj = pos[idx]
+                    for i in rows:
+                        dv = pj - pos[i]                     # toward the leaf particles
+                        r2 = (dv * dv).sum(axis=1) + 1e-8
+                        acc[i] += (mj[:, None] * dv * (r2 ** -1.5)[:, None]).sum(axis=0)
 
         return acc
 
