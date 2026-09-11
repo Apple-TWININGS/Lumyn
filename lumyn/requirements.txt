@@ -1,0 +1,1 @@
+torch 那行注释得拆开——既要保留“降级路径”的说明，又得明确默认不装。我把 torch 挪到独立的 extra 组里，注释改成“装可微版时用 pip install -e .[torch]”，这样 README 里能直接抄命令，也不会让新人误以为 torch 是必需品。

@@ -1,0 +1,19 @@
+// LumynPCGBridge.cs.stub —— Unity URP 接入桩
+// 收 Lumyn 的 JSON（高度场+碰撞盒+NavMesh 种子）
+// → Terrain.SetHeights / MeshCollider / NavMeshBuilder.BuildNavMesh
+
+using UnityEngine;
+using UnityEngine.AI;
+
+public class LumynPCGBridge : MonoBehaviour {
+    [System.Serializable]
+    public struct LumynFrame { public int frame; public uint seed; }
+
+    public void ApplyPCGResult(string jsonPath) {
+        // TODO: 解析 JSON → 写 TerrainData.SetHeights + 生成碰撞体 + BuildNavMesh
+    }
+
+    public void SamplePhysicsFrame(int frame, Vector3[] actorStates) {
+        // TODO: 回传受力给 Python SimScore 校验
+    }
+}

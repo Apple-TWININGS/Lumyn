@@ -1,0 +1,76 @@
+fix(physics): 修复可微物理路径的 5 处实质缺陷，57 项测试全绿
+
+背景：本仓库称作"物理可信"，但可微物理路径此前**从未真正执行过**——
+test_differentiable*.py 共 13 项带 @skipUnless(_HAS_TORCH)，在未装 PyTorch 的
+环境里全部被跳过，因此旧 README 的"44/44 通过"从未覆盖这部分代码。
+装上 torch 后 57 项被收集，暴露出 5 项失败。
+
+【1】引力符号错误（最严重）
+physics/differentiable.py::_accel 与 compute_acceleration 的符号映射把
+"非斥力(repulsive==0)"映射成 sign=-1，导致**引力实为斥力**：
+实测质点 (1,0,0) 的加速度方向余弦 = -1.0（背离原点）。
+且与 losses.total_energy 的 pe = -G·m_i·m_j/r（吸引约定）不一致，
+力与势能符号不符 → 能量从 -0.002 单调升至 +0.003。
+修正后方向余弦 +1.0；光滑圆轨道半径稳定在 0.998~0.999；
+能量漂移由 2.6 降至 1.8e-12（机器精度）。
+
+  旁证：scientific/differentiable.py 的孪生实现**符号是对的**（无负号）。
+  两个同源实现在引力符号上互相矛盾——正是 README 警告过的"双胞胎对不上号"。
+  本次修正使两者一致。
+
+【2】积分器非辛
+EnergyConservingIntegrator 原用梯形法：它仅对**线性**哈密顿系统等价于隐式中点，
+对非线性问题不构成辛映射，会系统性注入能量。实测症状：光滑圆轨道
+（M=1, r=1, v=1）在 dt=1e-3 下半径从 1.0 单调涨到 3.17（不到 1/3 个周期）。
+改为**隐式中点法**（对可分哈密顿系统是辛的），并加入基于最大加速度的
+逐子步自适应细分（_safe_dt），使近距离交会可积分。
+
+【3】NaN 梯度
+losses.total_energy 用 sqrt(Σd²).clamp(min=softening)：对角元 (i==j) 处 Σd²=0，
+而 sqrt 在 0 点导数为无穷；即便随后乘 eye=0 消去该项，反向传播仍产生
+0×inf = NaN。症状为**损失值有限（2950）而三个参数梯度全为 NaN**。
+改为把 softening 放进 sqrt 内部：sqrt(Σd² + softening²)，与 _accel 的软化约定一致。
+
+【4】精度静默降级
+DifferentiableNBody._to_tensor 无条件 .float()，把 float64 静默降为 float32，
+直接破坏守恒精度。改为保持输入浮点精度。
+
+【5】接口与语义缺陷
+- DifferentiableNBody 不是 nn.Module 却调用 self.zero_grad() → 补 zero_grad/parameters
+- verify_gradients：有限差分只跑 1 步、自动梯度跑满 steps 步，比较的是**两个不同函数**，
+  该测试永远不可能通过；且有限差分遍历全部 N*3 分量而 fn 只读第 0 个。
+  已改为两者计算同一量、并让 fn 使用整个输入张量。
+- ConservationBounds.report() 返回 max，但测试注释表明语义应为"首次 update 建立的基线漂移"
+  （超界由 within 单独标记）。已改为返回首值，另加 max_drift() 提供最大值。
+- scientific/differentiable.py::optimize_initial_conditions：
+  · pos = torch.randn(..., requires_grad=True) * 1.5 得到**非叶子张量**，
+    交给 Adam 抛 "can't optimize a non-leaf Tensor"；改为先缩放再 requires_grad_()
+  · target_pos 以 numpy 传入，与需要梯度的 traj[-1] 相减触发 Tensor.__array__ → .numpy()，
+    抛 "Can't call numpy() on Tensor that requires grad"；改为入口处转 Tensor
+- ConservationConstraint.forward：energy 调用有维度保护而 angular_momentum 没有，
+  传 (N,3) 速度时 vel[0] 退化为 1 维，torch.cross 与 (N,3) 的 traj[0] 维度不匹配。
+  已统一取值逻辑。
+
+【关于守恒测试的测量口径】
+test_conservation_error 原先用 (x_{n+1}-x_n)/dt 反推速度算能量。该估计存在
+只取决于 dt 的 O(dt) 偏差，其噪声地板远高于积分器自身误差，且**积分器越准失真越重**：
+    eta     真实漂移    有限差分口径    倍数
+    0.02    5.5e-4      8.3e-4         1.5x
+    0.01    1.6e-4      1.3e-3         7.9x
+    0.005   4.3e-5      1.9e-3          43x
+    0.002   7.1e-6      2.0e-3         285x
+即用旧口径时把积分器做到任意精度都**无法**通过 1e-4 阈值。
+故 integrate() 新增 return_velocities=True 返回真实速度，测试改用它。
+**阈值 1e-4 未改动**——修的是"测什么"，不是放宽标准。
+
+【其他】
+- integrate() 新增子步上限触顶告警：此前达到 max_substeps 时循环带着
+  t_left>0 静默退出，等于该步未走满 dt 而无人知晓（轨迹时间轴会错位）
+- README 测试数字按实测更正：旧"49/49"与"44/44"均非完整环境测得；
+  现为 57 收集 / 56 通过 / 1 skip（astropy 可选），并列出此前被遗漏的
+  test_differentiable*.py（共 13 项）及其被 skip 掩盖的问题
+- __init__.py 重构：原内容是一段中文待办笔记而非代码，import 直接 SyntaxError、
+  整个测试套件无法收集；改为单一入口 LumynEngine + PEP 562 延迟加载，
+  版本号移入 _version.py
+
+实测：python -m unittest discover -s lumyn/tests → Ran 57 tests, OK (skipped=1)

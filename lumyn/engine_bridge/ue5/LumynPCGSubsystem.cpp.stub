@@ -1,0 +1,21 @@
+// LumynPCGSubsystem.cpp.stub —— UE5 接入桩（蓝图+C++）
+// 对接 Lumyn Python 端生成的 JSON（高度场 + 碰撞盒 + NavMesh 种子）
+// 实际接入时替换为完整 .cpp/.h
+
+#pragma once
+#include "CoreMinimal.h"
+#include "Subsystems/WorldSubsystem.h"
+#include "LumynPCGSubsystem.generated.h"
+
+UCLASS()
+class ULumynPCGSubsystem : public UWorldSubsystem {
+    GENERATED_BODY()
+public:
+    // 收 Lumyn JSON → Terrain.SetHeights / MeshCollider / NavMeshBuilder.BuildNavMesh
+    UFUNCTION(BlueprintCallable)
+    void ApplyPCGResult(const FString& JsonPath);
+
+    // 运行时抽帧：把角色实际受力回传 Python 端跑 SimScore
+    UFUNCTION(BlueprintCallable)
+    void SamplePhysicsFrame(int Frame, const TArray<FVector>& ActorStates);
+};

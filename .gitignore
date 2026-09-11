@@ -1,0 +1,26 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- 运行产物 ----
+results/
+logs/
+lumyn_output/
+*.mp4
+*.csv
+*.fits
+*.npz
+
+# ---- 大体积数据 ----
+data/
+*.h5
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
