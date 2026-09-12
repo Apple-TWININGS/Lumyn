@@ -70,7 +70,7 @@ lumyn/
   sync/            lockstep / rollback / replay
   mobile/          LOD policy, thermal management
   docs/            PAPER_STATUS.md, RESEARCH_DIRECTION.md
-  tests/           unit tests (8 files, 69 tests)
+  tests/           unit tests (10 files, 113 tests)
 ```
 
 ---
@@ -176,7 +176,7 @@ python -m unittest discover -s lumyn/tests
 Current result, measured on this checkout:
 
 ```
-Ran 108 tests
+Ran 113 tests
 OK (skipped=1, expected failures=1)
 ```
 
@@ -185,21 +185,22 @@ Per file:
 | File | Tests | Covers |
 |------|------:|--------|
 | `test_conservation_critic.py` | 18 | Conservation critic: channel selection, score direction, permutation invariance, degenerate inputs, ranking, anti-fabrication guards |
+| `test_conservation_checker.py` | 16 | Angular-momentum correctness, momentum normalization, `fixed_mask` enforcement, galaxy scene stability, `diagnose` last-frame velocity |
 | `test_explain.py` | 16 | Causal tracing: real corruption/restore, exact-zero contribution when the validation gate is absent, results vary with corruption strength |
 | `test_scientific.py` | 12 | Export, rendering, teaching, presets, NumPy differentiable path |
 | `test_force_law.py` | 12 | Force law and acceleration sign conventions |
-| `test_conservation_checker.py` | 11 | Angular-momentum correctness, momentum normalization, `fixed_mask` enforcement, galaxy scene stability, `diagnose` last-frame velocity |
 | `test_engine.py` | 11 | Core engine |
 | `test_eval.py` | 9 | Answer grading, bootstrap CI, validator self-check |
 | `test_differentiable.py` | 8 | PyTorch differentiable path: forward, backward, gradient check, symplectic integrator, conservation loss |
 | `test_eval_p1.py` | 6 | E1/E2/E3 classification, chi-square comparison |
 | `test_differentiable_numpy.py` | 5 | Numerical-gradient fallback (no PyTorch required) |
-| **Total** | **108** | |
+| **Total** | **113** | |
 
-The suite passes. Earlier revisions of this document reported 69, 87 and 97 tests with
-one persistent failure in `test_galaxy_non_divergent`. That failure is now fixed, and
-it was never a threshold problem — see the limitations section for the three real
-defects behind it.
+The suite passes. Earlier revisions of this document reported 69, 87, 97 and 108 tests,
+with one persistent failure in `test_galaxy_non_divergent`. That failure is now fixed, and
+it was never a threshold problem — see the limitations section for the three real defects
+behind it. The move from 108 to 113 is `test_conservation_checker.py` growing from 11 to
+16 tests as the four defects below were pinned down by regression tests.
 
 > **On the older "44/44" and "57 passing" figures.** `test_differentiable*.py`
 > (13 tests) are guarded by `@unittest.skipUnless(_HAS_TORCH, ...)`. In an environment
