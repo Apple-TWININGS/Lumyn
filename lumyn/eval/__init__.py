@@ -4,6 +4,12 @@
 check_validator() 验证层自检 + error_classifier() E1/E2/E3 分类。
 """
 from .simscore import SimScore, ConservationChecker
+from .conservation_critic import (
+    ConservationCritic,
+    conservation_channels,
+    DEFAULT_CHANNELS,
+    ALL_CHANNELS,
+)
 from .sensitivity import sensitivity_test
 from .answer_judge import judge, extract_number, self_test as judge_self_test
 from .bootstrap_ci import bootstrap_ci, summarize_accuracy
@@ -37,6 +43,10 @@ def evaluate_scene(validation_result: dict) -> dict:
 __all__ = [
     "SimScore",
     "ConservationChecker",
+    "ConservationCritic",
+    "conservation_channels",
+    "DEFAULT_CHANNELS",
+    "ALL_CHANNELS",
     "sensitivity_test",
     "judge",
     "extract_number",

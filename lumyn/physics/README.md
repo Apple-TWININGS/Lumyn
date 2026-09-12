@@ -1,144 +1,180 @@
-# 可微物理模块（`lumyn/physics/`）
+# Differentiable physics (`lumyn/physics/`)
 
-**从「目标形态」反演符合物理的初始条件——梯度引导生成。**
+Recover physically valid initial conditions from a target final state by gradient descent.
 
-> 对应论文 §3.2 / §4.2「方法创新点」：
-> 普通生成是「噪声 → 生成 → 希望守恒（不可控）」；
-> 可微生成是「目标形态 → 损失 → 梯度 → 反演初始条件 → 必然守恒 ✅」。
+The distinction this module is built around:
 
----
-
-## 1. 三个文件（现在真实存在）
-
-| 文件 | 内容 | 依赖 |
-|------|------|------|
-| `differentiable.py` | `DifferentiableNBody`（pos/vel/mass 为 `nn.Parameter`）、`EnergyConservingIntegrator`（隐式辛积分）、`make_ellipse` | **PyTorch** |
-| `losses.py` | `PhysicsLosses`（能量/动量/角动量/质心守恒 + 目标半径 + 平滑度）、`ConservationBounds`（漂移上界监控） | PyTorch |
-| `guided_generation.py` | `ShapeGuidedGenerator`（梯度下降闭环）、`PhysicsGuidedSampler`（多样采样）、`generate_ellipse` | PyTorch |
-| `differentiable_numpy.py` | **NumPy 中心差分梯度版**（接口与上面完全对齐，无需 torch） | 仅 numpy |
-
-> ⚠️ **重要**：前三个是 PyTorch 自动微分实现；`differentiable_numpy.py` 是
-> 中心差分数值梯度兜底，**任何环境（含无 GPU / 无网络装不上 torch 的服务器）都能跑通验证**。
-> 论文实验建议用 PyTorch 版（`O(1e-4)` 守恒精度），演示与 CI 用 NumPy 版。
+- Conventional generation: sample noise, generate, hope the result conserves.
+- Gradient-guided generation: define a target, compute a loss, differentiate through the
+  simulation, and optimize the initial conditions toward it.
 
 ---
 
-## 2. 快速开始
+## Files
 
-### 有 PyTorch
+| File | Contents | Requires |
+|------|----------|----------|
+| `differentiable.py` | `DifferentiableNBody` (pos/vel/mass as `nn.Parameter`), `EnergyConservingIntegrator` (implicit midpoint, symplectic), `make_ellipse` | PyTorch |
+| `losses.py` | `PhysicsLosses` (energy, momentum, angular momentum, center of mass, target radius, smoothness), `ConservationBounds` | PyTorch |
+| `guided_generation.py` | `ShapeGuidedGenerator` (optimization loop), `PhysicsGuidedSampler`, `generate_ellipse` | PyTorch |
+| `differentiable_numpy.py` | NumPy central-difference gradient version, same interface, no PyTorch required | NumPy |
+
+The PyTorch path uses autograd. The NumPy path uses central differences and exists so
+that the interface can be exercised on machines where PyTorch cannot be installed.
+
+---
+
+## Usage
+
+### With PyTorch
+
 ```python
 from lumyn.physics import DifferentiableNBody, PhysicsLosses, ShapeGuidedGenerator
 
 sys = DifferentiableNBody(pos, vel, mass, steps=60)
 losses = PhysicsLosses(sys, targets={"radius": 1.0})
 gen = ShapeGuidedGenerator(sys, losses, lr=0.05, max_steps=200)
-info = gen.optimize()          # 梯度下降，最小化守恒误差 + 半径偏差
-result = gen.result()          # {"pos", "vel", "mass"} 符合物理的初始条件
+info = gen.optimize()
+result = gen.result()   # {"pos", "vel", "mass"}
 ```
 
-### 无 PyTorch（NumPy 兜底，本环境实测可用）
+### Without PyTorch
+
 ```python
 from lumyn.physics import DifferentiableNBodyNumpy, generate_ellipse_numpy
 
 sys = DifferentiableNBodyNumpy(pos, vel, mass, steps=40)
-info = sys.optimize(target_radius=1.0, lr=0.02, steps=80)   # 中心差分梯度
-# 或一句话：
+info = sys.optimize(target_radius=1.0, lr=0.02, steps=80)
+
 out = generate_ellipse_numpy(target_a=1.0, N=8, opt_steps=60)
 ```
 
 ---
 
-## 3. 实测结果（来自本仓库真实运行，非宣称）
+## Important: construct the system once
 
-环境：CPU，numpy 数值梯度版（`test_differentiable_numpy.py` 5/5 通过）。
+`DifferentiableNBody.__init__` stores its inputs as
+`nn.Parameter(self._to_tensor(pos).clone().detach()...)`.
 
-| 指标 | 初始 | 优化后 | 说明 |
-|------|------|--------|------|
-| 总损失 | 0.3909 | **4.61e-03** | 下降 ~85 倍 |
-| 最大能量漂移 | 7.03e-01 | **4.70e-02** | 下降一个量级 |
-| 中心差分梯度范数 | — | 0.0839 | >0，梯度引导确实在工作 |
+The `.detach()` means the parameters are **new leaf tensors**, unrelated to the arrays
+passed in. If you construct a new system inside an optimization loop, the optimizer
+updates your outer tensor while the forward pass reads a different, frozen one.
+PyTorch silently skips parameters whose `.grad is None`, so no error is raised — the
+loss simply never changes.
 
-> PyTorch 隐式辛积分器（`EnergyConservingIntegrator`）的守恒误差理论可达 **O(1e-5)**，
-> 详见 `test_differentiable.py`（需 `pip install torch` 后运行，当前环境未装故 skip）。
+Measured on a 6-body inversion task, `dt=0.01`, 40 steps, 50 optimization steps:
 
-对应论文表述：
-> 「守恒误差从 O(10⁻²)（显式 Verlet）降至 O(10⁻⁴~10⁻⁵)（隐式辛积分），
-> 且通过梯度优化，生成过程本身被约束在守恒流形上。」
+| Usage | Backward passes reaching the optimized tensor | Resulting error ratio |
+|-------|----------------------------------------------:|----------------------:|
+| New system per iteration (incorrect) | **0 / 50** | 1.000x (no progress) |
+| One system, optimize `system.parameters()` | 50 / 50 | 0.219x |
+
+**Correct pattern:** construct the system once and pass `system.pos`, `system.vel`,
+`system.mass` to the optimizer. `ShapeGuidedGenerator` already does this.
 
 ---
 
-## 4. 架构
+## Measured behaviour
+
+### NumPy path
+
+Environment: CPU, NumPy central differences. Run with:
 
 ```
-目标形态 (如 "椭圆轨道, a=1.0")
-        │
-        ▼
-   PhysicsLosses ── 能量守恒 + 动量守恒 + 角动量守恒 + 半径目标 + 平滑度
-        │
-        ▼
-   DifferentiableNBody.forward()  ← pos/vel/mass 全为 nn.Parameter
-        │
-        ▼
-   loss.backward()  ── 自动微分（torch）/ 中心差分（numpy）
-        │
-        ▼
-   Adam / L-BFGS 更新参数
-        │
-        ▼
-   符合物理的初始条件 ──→ NBodySimulator 演化 ──→ 视频 + CSV
+python -m unittest lumyn.tests.test_differentiable_numpy -v
+```
+
+Result: `Ran 5 tests ... OK`. Values printed by the suite:
+
+| Quantity | Value |
+|----------|-------|
+| Central-difference gradient norm | 0.0839 (nonzero, so gradient guidance is active) |
+| Optimization loss over 40 steps | 0.0024 to 0.001176 |
+| Energy drift before and after | 0.0000e+00 to 0.0000e+00 |
+
+### Gradient-guided optimization figure
+
+`make_figure.py` reports the following for the optimization it plots:
+
+| Quantity | Initial | After optimization |
+|----------|--------:|-------------------:|
+| Total loss | 0.3909 | 4.61e-03 |
+| Maximum energy drift | 7.03e-01 | 4.70e-02 |
+
+Reproduce with `python lumyn/physics/make_figure.py`.
+
+**Conservation accuracy of the PyTorch path.** The implicit midpoint integrator with
+adaptive substepping was measured on a smooth circular orbit: relative energy drift
+**1.8e-12**. Before the current fixes the same class used a trapezoidal scheme, which is
+not symplectic for nonlinear Hamiltonians; on that same circular orbit the radius grew
+from 1.0 to 3.17 within a third of a period. The PyTorch path is covered by
+`test_differentiable.py` (8 tests).
+
+---
+
+## Architecture
+
+```
+target state (e.g. "elliptical orbit, a = 1.0")
+        |
+        v
+  PhysicsLosses      energy + momentum + angular momentum + target radius + smoothness
+        |
+        v
+  DifferentiableNBody.forward()      pos/vel/mass are nn.Parameter
+        |
+        v
+  loss.backward()      autograd (PyTorch) or central differences (NumPy)
+        |
+        v
+  Adam / L-BFGS update
+        |
+        v
+  physically valid initial conditions  ->  NBodySimulator  ->  video + CSV
 ```
 
 ---
 
-## 5. 与论文闭环的关系
+## Figure
 
-```
-生成(可微) → 物理验证(SimScore+CI) → 答案判定(judge) → 错误诊断(E1/E2/E3)
-   ↑____________________ 梯度引导（本模块）____________________|
-```
+`gradient_guided_optimization.png` shows (a) total loss and (b) maximum energy drift
+during gradient-guided optimization.
 
-- **`eval/`**：判定生成结果「对不对」（SimScore + 置信区间）
-- **`explain/`**：定位错误「在哪一层」（三层因果追踪）
-- **`physics/`**：保证生成「必然守恒」（**本模块**）
+![Gradient-guided optimization](gradient_guided_optimization.png)
+
+Regenerate with `python lumyn/physics/make_figure.py`.
 
 ---
 
-## 6. Figure
+## Limitations
 
-`gradient_guided_optimization.png` —— 梯度引导优化过程中 (a) 总损失、(b) 最大能量漂移
-均单调下降，证明梯度引导有效。
-
-![梯度引导优化收敛](gradient_guided_optimization.png)
+1. PyTorch is an optional dependency. Without it, `test_differentiable.py` (8 tests)
+   is skipped rather than failed. Note that this skip also means the PyTorch path is
+   **not exercised at all** in a PyTorch-free environment — several real defects
+   (a sign error that made gravity repulsive, a non-symplectic integrator, NaN
+   gradients) were hidden by exactly this skip.
+2. The NumPy path uses central differences. Gradient accuracy is limited by the
+   simulation's truncation error (order 1e-4 in practice), lower than autograd but
+   sufficient to demonstrate that guidance is working.
+3. `EnergyConservingIntegrator` performs roughly 10-20 force evaluations per step,
+   which is slower than the explicit scheme. It is used where long-term conservation
+   accuracy matters.
+4. The current tests use N = 6-8. Beyond N of a few hundred, a Barnes-Hut tree and GPU
+   execution are required for this to be practical.
+5. The relativistic Lorentz factor is an approximation. Extreme gravitational fields
+   require a general-relativistic solver.
 
 ---
 
-## 7. 诚实边界
-
-1. **PyTorch 版**需 `pip install torch`；本仓库测试环境未装 torch，
-   `test_differentiable.py` 的 8 个用例会 **skip**（非 fail），属正常。
-2. **NumPy 版**用中心差分，梯度精度 ~ε²（ε=1e-5 → 1e-10 量级理论，
-   实际受模拟截断误差限制 ~1e-4），比 autograd 略低但足以验证引导有效。
-3. **隐式辛积分器**每步需 ~10-20 次力评估（比显式慢），长期守恒精度高 100×。
-4. 当前测试 N=6~8 小规模；**N>1000 必须配 Barnes-Hut + GPU** 才实用。
-5. 相对论 Lorentz 因子是**近似**，极端引力场（黑洞合并）仍需广义相对论求解器。
-
----
-
-## 8. 运行测试
+## Running the tests
 
 ```bash
-# NumPy 版（始终可跑，5 项真实验证）
+# NumPy path (always runnable)
 python -m unittest lumyn.tests.test_differentiable_numpy -v
 
-# PyTorch 版（需装 torch，否则 skip）
+# PyTorch path
 python -m unittest lumyn.tests.test_differentiable -v
 
-# 重新生成 Figure
+# Regenerate the figure
 python lumyn/physics/make_figure.py
-```
-
-预期输出（NumPy 版）：
-```
-Ran 5 tests in X.XXXs
-OK
 ```

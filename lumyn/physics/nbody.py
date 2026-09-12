@@ -44,8 +44,16 @@ class NBodySimulator:
         # 用 pairwise 会被 O(N^2) 抵消省算力优势，故仅在粒子数较小时启用
         return acc
 
-    def step(self, pos, mass, vel, dt=0.01, repulsion=0.0):
-        """单步 Velocity-Verlet。返回 (new_pos, new_vel)。"""
+    def step(self, pos, mass, vel, dt=0.01, repulsion=0.0, fixed_mask=None):
+        """单步 Velocity-Verlet。返回 (new_pos, new_vel)。
+
+        fixed_mask : (N,) bool 或 None
+            为 True 的粒子被**钉死**在初始位置、速度保持为 0，不参与动力学。
+            此前 `NBodySimulator` 完全没有这个参数：`galaxy()` 会返回一个
+            `fixed_mask` 并声称中心黑洞「不参与动力学」，但模拟器从不执行它，
+            于是质量为 1000（占系统总质量约一半）的中心体被自由积分
+            （实测 20 步内位移 4.35）。这是 galaxy 场景发散的原因之一。
+        """
         acc = self._acceleration(pos, mass)
 
         if repulsion > 0.0 and len(pos) <= 512:
@@ -57,18 +65,36 @@ class NBodySimulator:
             rep = repulsion * (mass[None, :] * inv_r3)[:, :, None] * d
             acc = acc + rep.sum(axis=1)
 
+        if fixed_mask is not None:
+            acc = acc.copy()
+            acc[np.asarray(fixed_mask, dtype=bool)] = 0.0
+
         # Velocity-Verlet
         vel_half = vel + 0.5 * self.G * acc * dt
         new_pos = pos + vel_half * dt
         acc_new = self._acceleration(new_pos, mass)
+        if fixed_mask is not None:
+            acc_new = acc_new.copy()
+            acc_new[np.asarray(fixed_mask, dtype=bool)] = 0.0
         new_vel = vel_half + 0.5 * self.G * acc_new * dt
+
+        if fixed_mask is not None:
+            # 钉死：位置与速度都强制回原值，避免浮点残差累积
+            fixed = np.asarray(fixed_mask, dtype=bool)
+            new_pos = new_pos.copy(); new_vel = new_vel.copy()
+            new_pos[fixed] = pos[fixed]
+            new_vel[fixed] = 0.0
         return new_pos, new_vel
 
-    def simulate(self, pos, mass, vel, n_steps=100, dt=0.01, repulsion=0.0):
-        """模拟 n_steps 步，返回轨迹 (n_steps+1, N, 3)。"""
+    def simulate(self, pos, mass, vel, n_steps=100, dt=0.01, repulsion=0.0,
+                 fixed_mask=None):
+        """模拟 n_steps 步，返回轨迹 (n_steps+1, N, 3)。
+
+        fixed_mask 会被逐帧透传给 step()，因此被标记的粒子在整条轨迹上保持静止。
+        """
         traj = [pos.copy()]
         for _ in range(n_steps):
-            pos, vel = self.step(pos, mass, vel, dt, repulsion)
+            pos, vel = self.step(pos, mass, vel, dt, repulsion, fixed_mask)
             traj.append(pos.copy())
         return np.stack(traj, axis=0)
 

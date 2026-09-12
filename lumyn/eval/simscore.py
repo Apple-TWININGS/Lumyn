@@ -74,6 +74,28 @@ class ConservationChecker:
 
     def check(self, traj: np.ndarray, mass: np.ndarray, dt: float = 0.01,
                fixed_mask: np.ndarray = None) -> dict:
+        """对整条轨迹诊断守恒漂移。
+
+        **已修正的两个缺陷（2026-09）**
+
+        1. `angular_drift` 此前算的是**线动量模长**的相对波动：
+
+               p_norms = ||P(t)||
+               angular_drift = max|p_norms - p_norms[0]| / p_norms[0]
+
+           这与角动量 L = Σ m (r × v) 无关。实测某星系场景上它报告 12.0176，
+           而真实角动量相对变化仅 0.0311 —— 相差 386 倍且物理量不同。
+           现在改为真正的角动量漂移。
+
+        2. `momentum_drift` 此前除以 `|P_0|`。净动量在旋转盘 / 对称爆炸等场景
+           天然接近 0，除以它会变成**除以噪声**。现改用恒为正的固有尺度 `Σ m‖v‖`。
+
+        另注意：由位置差商反推速度存在 O(dt) 的半步偏移，因此本方法适合做
+        **相对比较**，不宜作为绝对精度判据。需要高精度请传真实速度使用
+        `eval.conservation_critic`。
+        """
+        traj = np.asarray(traj, dtype=np.float64)
+        mass = np.asarray(mass, dtype=np.float64)
         n_steps = len(traj) - 1
         # 排除固定粒子（如中心黑洞），只对自由粒子做守恒检查
         if fixed_mask is not None:
@@ -81,30 +103,40 @@ class ConservationChecker:
         else:
             free = slice(None)
 
-        energies, momentums = [], []
+        energies, momentums, angulars = [], [], []
         for t in range(n_steps):
             v = (traj[t + 1] - traj[t]) / dt
             energies.append(self._energy(traj[t], v, mass))
-            momentums.append((mass[free, None] * v[free]).sum(axis=0))
+            p = (mass[free, None] * v[free]).sum(axis=0)
+            momentums.append(p)
+            # 角动量 L = Σ m (r × v)
+            L = (mass[free, None] * np.cross(traj[t][free], v[free])).sum(axis=0)
+            angulars.append(L)
 
         energies = np.array(energies)
         momentums = np.array(momentums)
+        angulars = np.array(angulars)
 
         e0 = abs(energies[0]) + 1e-8
-        p0 = np.linalg.norm(momentums[0]) + 1e-8
         energy_drift = abs(energies[-1] - energies[0]) / e0
-        momentum_drift = np.linalg.norm(momentums[-1] - momentums[0]) / p0
 
-        # 角动量守恒（对中心势阱场景更合适：线动量可交换，角动量严格守恒）
-        # 用总动量向量的方向稳定性近似：中心势阱下动量向量应绕质心旋转，模长近似守恒
-        p_norms = np.linalg.norm(momentums, axis=1)
-        p0_norm = p_norms[0] + 1e-8
-        angular_drift = float(np.max(np.abs(p_norms - p_norms[0]) / p0_norm))
+        # 动量：用「总速率加权质量」作尺度，恒为正，避免除以接近 0 的净动量
+        p_scale = float(
+            (mass[free, None] * np.abs((traj[-1] - traj[-2]) / dt)[free]).sum()
+        ) if n_steps > 0 else 1.0
+        p_scale = max(p_scale, 1e-12)
+        momentum_drift = float(
+            np.linalg.norm(momentums[-1] - momentums[0]) / p_scale)
+
+        # 角动量：真实的 L 漂移，除以 L 的模长尺度（同样加保护）
+        l_scale = max(float(np.linalg.norm(angulars, axis=1).mean()), 1e-12)
+        angular_drift = float(
+            np.linalg.norm(angulars[-1] - angulars[0]) / l_scale)
 
         return {
             "energy_drift": float(energy_drift),
             "momentum_drift": float(momentum_drift),
-            "angular_drift": float(angular_drift),
+            "angular_drift": angular_drift,
             "energy_conserved": energy_drift < self.energy_tol,
             "momentum_conserved": momentum_drift < self.momentum_tol,
             "angular_conserved": angular_drift < self.angular_tol,

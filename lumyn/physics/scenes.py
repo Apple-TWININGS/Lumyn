@@ -8,9 +8,26 @@ import numpy as np
 
 
 def galaxy(n_particles=500, seed=42, G=1.0):
-    """螺旋星系：中心大质量 + 盘面开普勒轨道 + 螺旋臂扰动。"""
+    """螺旋星系：中心大质量 + 盘面开普勒轨道 + 螺旋臂扰动。
+
+    **参数选择依据（实测，见 experiments/probe_galaxy_params.py）**
+
+    场景稳定性由**内圈轨道被积分的分辨率**决定，而不是由质量大小决定：
+
+    ==========================  ==========  ==============  ========
+    配置                         r_max 增长  内圈步数/轨道   结果
+    ==========================  ==========  ==============  ========
+    M=1000, r∈[0.1, 1]          46.7x       1.3             发散
+    M=200,  r∈[0.3, 1]          14.2x       14.6            发散
+    M=50,   r∈[0.5, 2]          4.84x       62.8            发散
+    M=20,   r∈[0.8, 3]          1.16x       201.1           **稳定**
+    ==========================  ==========  ==============  ========
+
+    （dt=0.005，40 步。此前该场景的最大半径从 0.997 涨到 550、能量漂移约 9000%，
+    而测试名却断言它「non_divergent」。）
+    """
     rng = np.random.default_rng(seed)
-    r = rng.uniform(0.1, 1.0, n_particles)
+    r = rng.uniform(0.8, 3.0, n_particles)
     theta = rng.uniform(0, 2 * np.pi, n_particles)
     theta = theta + 2.0 * r                       # 螺旋臂
     pos = np.stack([
@@ -19,9 +36,18 @@ def galaxy(n_particles=500, seed=42, G=1.0):
         rng.normal(0, 0.02, n_particles),
     ], axis=1)
 
-    mass = 10.0 / (1.0 + r ** 2)                  # 中心大、边缘小
+    disk_mass = 0.02                              # 盘面总量 ≈ 3% 中心质量，避免自引力坍缩
+    mass = np.full(n_particles, disk_mass)
 
-    v_circ = np.sqrt(G * 10.0 / np.maximum(r, 0.1))
+    # 圆轨道速度必须用**真实**的中心质量，并计入半径内的盘面质量：
+    #     v_circ = sqrt(G * M_enclosed / r)
+    # 此前写成 sqrt(G * 10.0 / r)，而实际中心体质量是 1000.0 —— 速度小了一个数量级，
+    # 盘面粒子根本无法做圆周运动。
+    M_CENTER = 20.0
+    order = np.argsort(r)
+    enclosed = np.empty_like(r)
+    enclosed[order] = np.cumsum(mass[order])
+    v_circ = np.sqrt(G * (M_CENTER + enclosed) / r)
     vel = np.stack([
         -v_circ * np.sin(theta),
         v_circ * np.cos(theta),
@@ -30,8 +56,9 @@ def galaxy(n_particles=500, seed=42, G=1.0):
 
     # 中心黑洞作为固定势阱（不参与动力学），速度=0。
     # fixed_mask 存为模块属性，供守恒检查排除黑洞（避免伪动量漂移）。
+    # 注意：掩码必须由模拟器**真正执行**，见 NBodySimulator.step(fixed_mask=...)。
     pos = np.concatenate([np.array([[0.0, 0.0, 0.0]]), pos], axis=0)
-    mass = np.concatenate([np.array([1000.0]), mass], axis=0)
+    mass = np.concatenate([np.array([M_CENTER]), mass], axis=0)
     vel = np.concatenate([np.zeros((1, 3)), vel], axis=0)
     fixed_mask = np.zeros(len(mass), dtype=bool)
     fixed_mask[0] = True
