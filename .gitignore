@@ -1,4 +1,4 @@
-# ---- Python ----
+﻿# ---- Python ----
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -24,3 +24,6 @@ data/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- 由示例脚本生成，不应入库 ----
+diff_figure.png
