@@ -23,38 +23,45 @@ No external figure files are needed — every result is a table.
 
 ## Verification status
 
-**This document has not been compiled.** No LaTeX toolchain (`pdflatex`,
-`xelatex`, `latexmk`, `tectonic`, `pandoc`) was available in the authoring
-environment, so the rendered output — page breaks, float placement, font
-substitution, package compatibility — is **unverified**.
-
-What *has* been verified mechanically, by `check_tex.py`:
+**This document has now been compiled.** It was built on 2026-09-12 with TeX Live
+on Ubuntu 22.04 (`latexmk -pdf`), because the authoring environment had no LaTeX
+toolchain. Result:
 
 | Check | Status |
 |---|---|
-| Balanced `{` / `}` (escape- and comment-aware) | pass |
-| `\begin` / `\end` pairing and nesting order | pass |
-| Document-level `$` parity (multi-line inline math aware) | pass |
-| Required preamble (`\documentclass`, `document` environment, ordering) | pass |
-| Every `\ref` / `\eqref` target has a matching `\label` | pass |
-| Every `\cite` key has a matching `\bibitem` | pass |
-| No bare `_` outside math mode | pass |
+| Builds without error | pass (`latexmk` exit 0) |
+| Pages | 10 |
+| Undefined references / citations | **0** (28 labels, 3 bibitems, all resolved) |
+| Overfull `\hbox` | **0** |
+| Underfull `\hbox` / Overfull `\vbox` | 0 / 0 |
+| Missing characters | 0 |
 
-Run it with:
+The **first** compile was not clean: six Overfull `\hbox` warnings, every one of
+them in a table header rather than in body text, the worst by 74 pt (about
+26 mm — the table ran roughly an inch past the right margin). They were fixed
+in two steps, each measured rather than assumed:
 
-```bash
-python lumyn/docs/paper/check_tex.py lumyn/docs/paper/main.tex
-```
+1. `\setlength{\tabcolsep}{4pt}` globally (from the 6 pt default) — this alone
+   removed one warning and cut the rest by ~16 pt each.
+2. `\small` on all 14 tables, then `\footnotesize` on the three widest — drove
+   the remaining warnings to zero and shortened the paper from 11 to 10 pages.
 
-The checker was itself validated against a deliberately broken file, in which it
-caught all six injected faults (unbalanced brace, mismatched environment,
-unclosed `document`, undefined reference, undefined citation, bare underscore).
-A checker that always passes would be worthless, so this negative control
-matters.
+`\resizebox{\textwidth}{!}{...}` was deliberately **not** used: it scales each
+table by its own factor, so tables that start at different widths end up with
+different font sizes.
 
-**Before submitting, compile on a machine with TeX and read the PDF.** The
-static checks cannot catch layout problems, and this paper's claim of
-reproducibility should extend to its own typesetting.
+`check_tex.py` remains useful and is complementary — it checks brace and
+environment balance, preamble presence, and undefined-macro references, and runs
+without a TeX installation. It caught all six injected faults in a deliberately
+broken file, so it is not a checker that always passes. But it cannot see
+layout, which is exactly what the first real compile exposed.
+
+### Known remaining caveat
+
+The build host's TeX Live is Ubuntu's packaged 2022 release. A different TeX
+distribution (TeX Live 2024+, MiKTeX) may hyphenate differently and shift line
+breaks slightly. The zero-Overfull result is therefore specific to this
+toolchain; re-check after switching.
 
 ## Relationship to `PAPER_DRAFT.md`
 

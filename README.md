@@ -71,12 +71,18 @@ Full draft: [`lumyn/docs/PAPER_DRAFT.md`](lumyn/docs/PAPER_DRAFT.md) ·
 LaTeX source: [`lumyn/docs/paper/main.tex`](lumyn/docs/paper/main.tex) ·
 evidence ledger: [`lumyn/docs/PAPER_STATUS.md`](lumyn/docs/PAPER_STATUS.md).
 
-> **The paper has not been compiled.** No LaTeX toolchain was available in the authoring
-> environment. `main.tex` passes a static checker (braces, environments, macro pairing,
-> reference and citation resolution), and that checker was itself validated against a
-> deliberately broken file where it caught all six injected faults — but page breaks,
-> float placement and font substitution are **unverified**. Compile on a machine with TeX
-> and read the PDF before trusting the typeset output.
+> **The paper has been compiled.** It was built on 2026-09-12 with TeX Live on
+> Ubuntu 22.04 via `latexmk`, after the authoring environment turned out to have no
+> LaTeX toolchain: **10 pages, 0 undefined references, 0 Overfull/Underfull boxes.**
+> The *first* compile was not clean — six Overfull `\hbox` warnings, every one of
+> them in a table header rather than in body text, the worst by 74 pt (~26 mm,
+> roughly an inch past the right margin). They were fixed by tightening
+> `\tabcolsep` and lowering the font one step on the widest tables, each step
+> measured rather than assumed. The rendered PDF was also read page by page,
+> because a clean log is not the same as a correct page. See
+> [`lumyn/docs/paper/README.md`](lumyn/docs/paper/README.md) for the full
+> verification table and the one remaining caveat (the build used TeX Live 2022;
+> other distributions hyphenate differently).
 
 ---
 

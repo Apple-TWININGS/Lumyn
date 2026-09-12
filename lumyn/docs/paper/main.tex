@@ -1,10 +1,14 @@
 % Zero-Shot Conservation Critics for Generative Physical Simulation
 % arXiv preprint.  Build: pdflatex main && pdflatex main
 %
-% NOTE ON VERIFICATION: no LaTeX toolchain was available in the authoring
-% environment, so this file has NOT been compiled.  Its structure is checked
-% mechanically by `docs/paper/check_tex.py` (brace / environment balance,
-% preamble presence, undefined-macro scan); the rendered output is unverified.
+% NOTE ON VERIFICATION: this file has now been COMPILED.  The authoring
+% environment had no LaTeX toolchain, so the rendered output was unverified for
+% a long time; it was built on 2026-09-12 with TeX Live on Ubuntu 22.04 via
+% latexmk.  Result: 10 pages, 0 undefined references, 0 Overfull/Underfull boxes.
+% The first compile reported six Overfull \hbox warnings, all of them in table
+% headers -- the fixes are the \tabcolsep reduction below and \small /
+% \footnotesize on the widest tables.  `docs/paper/check_tex.py` remains useful
+% as a structural check and is complementary to an actual build.
 \documentclass[11pt]{article}
 
 \usepackage[margin=1in]{geometry}
@@ -17,6 +21,12 @@
 \newcommand{\argmax}{\operatorname*{arg\,max}}
 \newcommand{\rmse}{\mathrm{RMSE}}
 \newcommand{\eps}{\varepsilon}
+
+% Column separation tightened from the 6pt default: the first compile (on a machine
+% with TeX, which the authoring environment lacked) reported six Overfull \hbox
+% warnings, all of them in table headers. Reducing the inter-column space is the
+% least invasive fix and keeps every table in the same style.
+\setlength{\tabcolsep}{4pt}
 
 \title{Zero-Shot Conservation Critics\\ for Generative Physical Simulation}
 \author{}
@@ -152,6 +162,8 @@ For each initial condition (an ``IC''):
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Metrics. Lower is better except for the win rate.}
 \label{tab:metrics}
 \begin{tabular}{llcc}
@@ -170,6 +182,8 @@ selected / oracle & median selected error $\div$ median of per-IC minimum error 
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Systems used throughout.}
 \label{tab:systems}
 \begin{tabular}{llll}
@@ -204,6 +218,8 @@ hand-built corruptions. Section~\ref{sec:taxonomy} explains why that choice was 
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Critics compared. Training budgets differ per experiment; each table states
 its own. ``HNN, energy drift'' is the naive way to use an HNN as a critic; see
 Section~\ref{sec:main}.}
@@ -272,6 +288,8 @@ This predicts the measured channel ranking and is confirmed by a step-size sweep
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Noise floors and energy separation as a function of step size. The energy
 floor halves with $\Delta t$; the momentum and angular floors stay pinned at roundoff.}
 \label{tab:noisefloor}
@@ -306,6 +324,8 @@ ICs $=$ 4800 labelled candidates):
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Pooled versus within-group rank correlation. The supervised error regressor
 looks competitive pooled but has a within-group win rate of $53\%$ --- chance.}
 \label{tab:pooled}
@@ -331,6 +351,8 @@ $\mathbf{86.5\%}$, a 39-point gap from the target alone.
 
 \begin{table}[t]
 \centering
+\footnotesize
+% [fit] \footnotesize: this table is the widest in the paper
 \caption{figure-eight three-body ($N=3$, 2D), 50 test ICs, $K=8$. ``Separation'' is the
 relative gap between the critic's score on the true trajectory and on the $\sigma=0$
 candidate.}
@@ -350,6 +372,8 @@ random / oracle & --- & --- & 50.0\% / 100\% & $1.000\times$ / $0.243\times$ & $
 
 \begin{table}[t]
 \centering
+\footnotesize
+% [fit] \footnotesize: this table is the widest in the paper
 \caption{Kepler two-body ($N=2$, 2D), 50 test ICs, $K=8$.}
 \label{tab:kepler}
 \begin{tabular}{lrrrrr}
@@ -376,6 +400,8 @@ Large absolute separation and good within-group ranking are different properties
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{6-body system, 5 seeds, 95\% CI (120 training ICs). The conservation critic's
 advantage over the supervised ranking critic has non-overlapping 95\% CIs on both
 splits.}
@@ -405,6 +431,8 @@ better):
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Channel-set ablation. The previously-used equal-weight sum of four channels is
 substantially suboptimal.}
 \label{tab:ablation}
@@ -438,6 +466,8 @@ each corruption's median RMSE matches the generator's ($0.01468$):
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Severity calibration. ``Lower bound'' means the corruption was made as mild as
 its parameterisation allows.}
 \label{tab:calib}
@@ -462,6 +492,8 @@ construction, not a failure mode.
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Separation of true from corrupted trajectories, per channel. The real
 generator's failure mode is breaking Newton's third law, which destroys angular and
 linear momentum conservation. Four of the five synthetic corruptions leave those
@@ -497,6 +529,8 @@ translation- or rotation-invariant, unlike a pairwise force model.
 
 \begin{table}[t]
 \centering
+\footnotesize
+% [fit] \footnotesize: this table is the widest in the paper
 \caption{HNN used as the \emph{generator}. The conservation critic's lead does not
 survive the change of generator.}
 \label{tab:crossgen}
@@ -533,6 +567,8 @@ correlated it, within each IC, with the true trajectory error.
 
 \begin{table}[t]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Tested explanation. Positive Spearman means the diagnostic predicts trajectory
 error. The full force error is a \emph{worse} predictor than the conservation residual in
 all four settings, so this diagnostic cannot support the ``invisible structure''
@@ -680,6 +716,8 @@ S.~Greydanus, M.~Dzamba, and J.~Yosinski.
 
 \begin{table}[h]
 \centering
+\small
+% [fit] table font reduced to \small; see build note in preamble
 \caption{Result-to-script map.}
 \label{tab:repro}
 \begin{tabular}{ll}
