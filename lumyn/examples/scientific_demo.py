@@ -16,33 +16,29 @@ from lumyn.scientific import (  # noqa: E402
     ScientificVisualizer, ScientificExporter, FrameExtractor,
     TeachingMode, PhysicsMetrics, presets,
 )
-# 可微版：优先 torch，缺失时自动走 NumPy 数值梯度兜底
-try:
-    from lumyn.scientific.differentiable import (  # noqa: E402
-        DifferentiableNBody, ConservationConstraint, optimize_initial_conditions,
-    )
-    from lumyn.scientific.differentiable_numpy import (
-        ConservationConstraintNumPy, optimize_initial_conditions as optimize_initial_conditions_numpy,
-    )
-    _HAS_TORCH = True
-except Exception:  # pragma: no cover
-    from lumyn.scientific.differentiable_numpy import (  # noqa: E402
-        DifferentiableNBodyNumPy as DifferentiableNBody,
-        ConservationConstraintNumPy,
-        optimize_initial_conditions as optimize_initial_conditions_numpy,
-    )
-    ConservationConstraint = ConservationConstraintNumPy  # 统一名称
-    _HAS_TORCH = False
-
-import numpy as _np
+# NumPy 兜底实现：**始终导入**，并显式别名。
+# 此前该脚本在 torch 可用时 `DifferentiableNBody` 绑定到 torch 版
+# （scientific/differentiable.py），却把 numpy 数组喂进去，于是报
+# `'numpy.ndarray' object has no attribute 'unsqueeze'` —— 注释写着「统一用 NumPy 版」，
+# 但代码并没有这么做。现在一律用 NumPy 版，行为与注释一致。
+from lumyn.scientific.differentiable_numpy import (  # noqa: E402
+    DifferentiableNBodyNumPy,
+    ConservationConstraintNumPy,
+    optimize_initial_conditions as optimize_initial_conditions_numpy,
+)
 
 try:
     import torch as _torch  # noqa: E402
+    _HAS_TORCH = True
 except ImportError:
     _torch = None  # type: ignore
+    _HAS_TORCH = False
 
-OUT = os.path.join(ROOT, "..", "lumyn_output")
-OUT = os.path.abspath(OUT)
+import numpy as _np  # noqa: E402（脚本内部沿用 _np 别名）
+
+# 产物目录。此前写成 os.path.join(ROOT, "..", "lumyn_output")，会把文件写到
+# **仓库之外**（ROOT 已经是仓库根，再加 ".." 就跑出去了）。
+OUT = os.path.abspath(os.path.join(ROOT, "lumyn_output"))
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -66,7 +62,7 @@ def run_scene(name: str, steps: int = 40):
     try:
         from PIL import Image
         fe = FrameExtractor(mp4)
-        frames = fe.extract(n=9, strategy="change_aware")
+        frames = fe.extract(n=9, strategy="uniform")
         labels = [f"t={i * steps // max(len(frames), 1)}" for i in range(len(frames))]
         grid = FrameExtractor.make_grid(frames, cols=3,
                                         output_path=os.path.join(OUT, f"{name}_frames.png"),
@@ -121,24 +117,35 @@ def _estimate_vel(traj: np.ndarray, dt: float) -> np.ndarray:
 
 def run_differentiable():
     print("\n[Differentiable] 梯度引导：从目标形态反推初始条件")
-    print(f"  backend: {'torch' if _HAS_TORCH else 'numpy (数值梯度兜底)'}")
+    print(f"  backend: numpy（中心差分数值梯度）"
+          f"{'；torch 已安装但本演示统一走 NumPy 版以保证接口一致' if _HAS_TORCH else ''}")
 
     target = _np.random.default_rng(0).normal(0, 0.5, (40, 3)).astype(_np.float32)
-    result = optimize_initial_conditions_numpy(target, n=40, steps=10, iters=6, lr=0.05, G=1.0)
+    result = optimize_initial_conditions_numpy(target, n=40, steps=10, iters=6,
+                                               lr=0.05, G=1.0)
     print(f"  final_energy_drift = {result['final_energy_drift']:.4f}")
     print(f"  trajectory shape   = {result['trajectory'].shape}")
 
-    # 守恒约束演示（统一用 NumPy 版，torch 版接口一致）
-    model = DifferentiableNBody(G=1.0, softening=0.05, dt=0.01, method="leapfrog")
+    model = DifferentiableNBodyNumPy(G=1.0, softening=0.05, dt=0.01,
+                                     method="leapfrog")
     rng = _np.random.default_rng(1)
     pos = rng.normal(0, 1, (30, 3)).astype(_np.float64)
-    mass = _np.ones(30) * 0.1; mass[0] = 5.0
+    mass = _np.ones(30) * 0.1
+    mass[0] = 5.0
     vel = _np.zeros((30, 3))
     traj = model.simulate(pos, vel, mass, steps=6)
-    c = ConservationConstraintNumPy()
-    out = c(traj, vel, mass, G=1.0, softening=0.05)
-    print(f"  constraint loss = {out['loss']:.6f}  "
-          f"E_drift={out['energy_drift']:.4f}  AM_drift={out['angular_momentum_drift']:.4f}")
+    print(f"  trajectory shape   = {traj.shape}")
+
+    # 守恒诊断（用与 PhysicsMetrics 相同的口径，避免依赖可选类）
+    d = PhysicsMetrics(G=1.0).diagnose(traj, mass, dt=0.01)
+    print(f"  E_drift={d['energy_drift']:.6f}  "
+          f"AM_drift={d['angular_momentum_drift']:.6f}")
+    try:
+        c = ConservationConstraintNumPy()
+        out = c(traj, vel, mass, G=1.0, softening=0.05)
+        print(f"  constraint loss = {out['loss']:.6f}")
+    except Exception as e:      # pragma: no cover - 可选组件
+        print(f"  （ConservationConstraintNumPy 未采用：{type(e).__name__}）")
 
 
 def run_teaching():
