@@ -27,7 +27,10 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 包根是 experiments 的上两级（…/lumyn_v14），不是上一级。
+# 此前只上跳两级到 …/lumyn，`import lumyn` 必然 ModuleNotFoundError。
+sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 
 import numpy as np
 import torch

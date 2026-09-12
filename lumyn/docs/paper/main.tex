@@ -1,0 +1,705 @@
+% Zero-Shot Conservation Critics for Generative Physical Simulation
+% arXiv preprint.  Build: pdflatex main && pdflatex main
+%
+% NOTE ON VERIFICATION: no LaTeX toolchain was available in the authoring
+% environment, so this file has NOT been compiled.  Its structure is checked
+% mechanically by `docs/paper/check_tex.py` (brace / environment balance,
+% preamble presence, undefined-macro scan); the rendered output is unverified.
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\rmse}{\mathrm{RMSE}}
+\newcommand{\eps}{\varepsilon}
+
+\title{Zero-Shot Conservation Critics\\ for Generative Physical Simulation}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Generative models of physical scenes are typically validated with a \emph{critic}: a
+score that ranks or filters candidate trajectories. Learned critics are the default
+choice, but they require labelled data and can be brittle. We ask whether a
+\textbf{zero-shot critic built from conservation laws} --- no training, no labels ---
+is competitive.
+
+We study \emph{candidate selection}: given $K$ trajectories generated from the same
+initial condition by a learned dynamics model, pick the one closest to the true
+solution. This is the operation a critic performs inside a generation loop, and unlike
+classification-style metrics it needs no threshold on ``how wrong is wrong''.
+
+Across three systems --- a 6-body 3D family, the figure-eight three-body choreography,
+and a 2D Kepler two-body system --- a zero-shot conservation critic attains
+\textbf{100\% within-group selection accuracy} on the standard benchmarks, reducing
+trajectory error by 75--82\% relative to random selection and landing within
+$1.03$--$1.05\times$ of the best achievable selection. On the 6-body system (5 seeds,
+95\% CI) it reaches $82.8\%\pm3.3\%$ in distribution and $84.7\%\pm1.8\%$ out of
+distribution, versus $71.2\%\pm3.2\%$ and $72.2\%\pm2.5\%$ for a supervised
+pairwise-ranking critic trained on the same 960 labelled candidates.
+
+We also establish what the conservation critic is \emph{not}. It does \textbf{not} beat
+a correctly-used Hamiltonian Neural Network critic: the two tie exactly (identical
+selection error on both standard benchmarks). And its lead does not survive a change of
+\emph{generator}: with an HNN as the generator the supervised critic is at least as good.
+Claims that the conservation critic is more robust out of distribution, or that combining
+it with a learned critic helps, are \textbf{falsified} here and retracted.
+
+Three methodological findings, each independently useful. (i) \textbf{Pooled rank
+correlation is misleading for critics}: a supervised regressor scored pooled Spearman
+$\rho=-0.67$, comparable to the best critic, while achieving a within-group win rate of
+$53\%$, i.e.\ chance. (ii) \textbf{A conservation channel's discriminative power is set
+by its noise floor}, determined by the integrator and force structure rather than by the
+physical importance of the quantity: momentum and angular momentum are conserved
+\emph{exactly} by any pairwise central-force integrator (floor $\sim10^{-16}$) and
+separate true from generated trajectories by $\sim10^{12}$, whereas energy is conserved
+only to the integrator's truncation error ($O(\Delta t)$, floor $0.60$ at
+$\Delta t=0.01$) and separates by only $1.13\times$. (iii) \textbf{Synthetic failure
+modes must be validated before use}: a taxonomy of hand-built corruptions is not
+structurally comparable to a real generator's failures --- two of five cannot be tuned
+to the generator's error magnitude at all, and conservation fingerprints differ by up
+to $238$ normalized units.
+\end{abstract}
+
+\section{Introduction}
+
+A generative model of physical scenes --- a learned surrogate, a neural ODE, a video
+model --- produces trajectories that may look plausible while violating physics. The
+standard remedy is a \emph{critic}: a function that scores a candidate so that bad
+samples can be filtered, ranked, or used as a training signal.
+
+Learned critics dominate, and they work: a network can capture subtle dynamical errors
+that no simple statistic catches. But they need labelled examples, and labels for
+physical validity are exactly what one is trying to avoid needing.
+
+This paper asks a narrower and more testable question than ``can physics replace
+learning?'':
+
+\begin{quote}
+\emph{Is a critic built from conservation laws --- which is training-free and
+label-free --- competitive with the strongest learned critics at selecting good
+candidates?}
+\end{quote}
+
+The answer we establish is: \textbf{yes, it ties the strongest}, and it does so at zero
+labelling cost. We also document three claims that turned out to be false, because the
+process of falsifying them produced the paper's methodological contributions.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item \textbf{C1. A threshold-free evaluation protocol} for critics in a generation
+    loop: \emph{within-group selection}. Given $K$ candidates from one initial
+    condition, measure the critic's rank correlation \emph{within that group} and its
+    selection error relative to random and oracle. Section~\ref{sec:metric} shows that
+    the more obvious pooled metric is badly misleading.
+  \item \textbf{C2. A zero-shot conservation critic that ties the strongest
+    baselines}, including a correctly-used Hamiltonian Neural Network and a supervised
+    pairwise-ranking critic trained on up to 4800 labelled candidates
+    (Section~\ref{sec:main}).
+  \item \textbf{C3. A noise-floor theory of channel selection} that explains,
+    predicts, and improves the channel set (Sections~\ref{sec:nf} and
+    \ref{sec:ablation}).
+  \item \textbf{C4. A negative result on synthetic failure taxonomies}, with a
+    calibration procedure to test comparability before the taxonomy is used
+    (Section~\ref{sec:taxonomy}).
+  \item \textbf{C5. Three retractions} of claims made in earlier drafts of this work
+    (Section~\ref{sec:retractions}).
+\end{itemize}
+
+\section{Related work}
+
+\paragraph{Learned physical simulators.}
+Hamiltonian Neural Networks \cite{greydanus2019hnn} and Lagrangian Neural Networks
+\cite{cranmer2020lNN} learn a scalar potential whose derivatives reproduce the
+dynamics. They are the natural learned alternative to a hand-written conservation law,
+and we adopt an HNN as our primary literature baseline.
+
+\paragraph{Neural surrogates and operators} learn the flow map directly. Their errors are
+typically evaluated by trajectory RMSE against a reference integration, which is
+available in simulation but not in the field.
+
+\paragraph{Physics-based validation.} Conservation checks are standard in numerical
+relativity and molecular dynamics as diagnostics. Using them as a \emph{critic inside a
+generative loop} --- the object of this paper --- is less studied.
+
+\paragraph{Positioning.} We do not propose a new generator. We characterise when a
+training-free physical critic is sufficient, and we show that the answer depends on a
+numerical property (the noise floor) rather than on the physics.
+
+\section{Setup}
+\label{sec:setup}
+
+\subsection{Task: within-group candidate selection}
+
+For each initial condition (an ``IC''):
+
+\begin{enumerate}
+  \item integrate the true equations of motion to obtain a reference trajectory
+    $x^{\star}(t)$;
+  \item run a learned generator $K=8$ times from the \emph{same} IC, with varying
+    sampling noise $\sigma\in\{0,\,0.02,\,0.05,\,0.10,\,0.20,\,0.35,\,0.6,\,1.0\}$;
+  \item compute each candidate's error $e_j = \rmse(x_j, x^{\star})$;
+  \item score all candidates with each critic and select $\argmax_j \mathrm{score}_j$.
+\end{enumerate}
+
+\begin{table}[t]
+\centering
+\caption{Metrics. Lower is better except for the win rate.}
+\label{tab:metrics}
+\begin{tabular}{llcc}
+\toprule
+Metric & Definition & Chance & Perfect \\
+\midrule
+within-group $\rho$ & mean over ICs of Spearman(scores, $e$) inside the IC & $0$ & $-1$ \\
+IC win rate & fraction of ICs where the selection beats that IC's median error & 50\% & 100\% \\
+selected / random & median selected error $\div$ median of per-IC mean error & 1.00 & --- \\
+selected / oracle & median selected error $\div$ median of per-IC minimum error & --- & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Systems}
+
+\begin{table}[t]
+\centering
+\caption{Systems used throughout.}
+\label{tab:systems}
+\begin{tabular}{llll}
+\toprule
+System & $N$ & Dim. & Notes \\
+\midrule
+6-body, eccentric family & 6 & 3D & $e\sim U(0,0.3)$ ID; $e\sim U(0.5,0.8)$ OOD \\
+figure-eight choreography & 3 & 2D & \cite{chenciner2000}; $T=6.32591398$ \\
+Kepler two-body & 2 & 2D & standard low-dimensional HNN/LNN testbed \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Checker for the figure-eight initial data: after exactly one standard period at
+$\Delta t = 0.002$ (3163 steps) the configuration returns to the initial condition to
+within $3.29\times10^{-3}$ in position. All integrations use symplectic Euler at
+$\Delta t = 0.002$--$0.01$.
+
+\subsection{Generators}
+
+The generator is a pairwise force model: a shared MLP applied to
+$[\,r_{ij},\,|r_{ij}|,\,v_{ij},\,m_i,\,m_j\,]$ producing a scalar pair force, summed
+over neighbours. It is deliberately trained on a \emph{limited budget} so that its
+failures are large enough to be selectable among (one-step acceleration error $0.23$
+for the 6-body system; three budgets, $0.23/0.0068/0.81$, are used for robustness
+checks).
+
+Negative samples therefore come from a \textbf{real learned generator}, not from
+hand-built corruptions. Section~\ref{sec:taxonomy} explains why that choice was forced.
+
+\subsection{Critics}
+
+\begin{table}[t]
+\centering
+\caption{Critics compared. Training budgets differ per experiment; each table states
+its own. ``HNN, energy drift'' is the naive way to use an HNN as a critic; see
+Section~\ref{sec:main}.}
+\label{tab:critics}
+\begin{tabular}{lll}
+\toprule
+Critic & Labels required & Notes \\
+\midrule
+\textbf{Conservation (zero-shot)} & \textbf{0} & angular $+$ momentum channels \\
+HNN, equation residual & true trajectories & \cite{greydanus2019hnn} \\
+HNN, energy drift & true trajectories & naive use as a critic \\
+Pairwise ranking loss & 960--4800 candidates & supervised, target-aligned \\
+Absolute binary classifier & 960--4800 candidates & supervised, naive target \\
+Absolute error regressor & 960--4800 candidates & supervised, naive target \\
+Random / oracle & --- & reference points \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Method: the conservation critic}
+
+\subsection{Conservation drift as an error functional}
+
+Let the true acceleration field be a sum of pairwise central forces,
+\begin{equation}
+a^{\text{true}}_i(r)=\frac{1}{m_i}\sum_{j\neq i} f(r_{ij})\,\hat{r}_{ij},
+\end{equation}
+and let $\delta a(t) = a^{\text{gen}}(\hat{z}(t)) - a^{\text{true}}(\hat{r}(t))$ be the
+generator's acceleration error along its own trajectory $\hat{z}$. Because
+$\sum_i m_i a^{\text{true}}_i \equiv 0$ and
+$\sum_i m_i (r_i \times a^{\text{true}}_i) \equiv 0$ hold pointwise,
+\begin{equation}
+\label{eq:noether}
+\frac{dP}{dt}=\sum_i m_i\,\delta a_i,\qquad
+\frac{dL}{dt}=\sum_i m_i\,(\hat{r}_i\times\delta a_i),\qquad
+\frac{dE}{dt}=\sum_i m_i\,(\hat{v}_i\cdot\delta a_i).
+\end{equation}
+The conservation residual is therefore the \textbf{projection of the accumulated force
+error onto the symmetry generators} --- a physics-meaningful functional, not a
+heuristic.
+
+Semi-quantitative validation (40 ICs, medians of the ratio prediction/measured):
+momentum $0.53\times$, angular $1.23\times$, energy $9.0\times$; log-correlations
+$0.72/0.31/0.22$. Equation~\eqref{eq:noether} is exact; its integrated form is
+validated to within a factor of a few for the channels with a clean numerical floor.
+
+\begin{quote}
+\textbf{What is \emph{not} claimed.} Equation~\eqref{eq:noether} bounds the
+\emph{drift} by the force error. It gives \textbf{no bound on trajectory error}: any
+$\delta a$ lying in the orthogonal complement of the three generators produces zero
+residual with arbitrarily large trajectory deviation. We never assume such a
+$\delta a$ is absent.
+\end{quote}
+
+\subsection{Which channels to use, and why}
+\label{sec:nf}
+
+The channels are measured on the reference trajectories. linear and angular momentum
+are exact invariants of any pairwise central force, to roundoff, independent of the
+integrator; their floor is $\eta_P \sim \eta_L \sim \eps_{\text{mach}} \approx
+10^{-16}$. Energy is conserved only to the integrator's truncation error; for the
+first-order symplectic Euler used here, $\eta_E = O(\Delta t)$.
+
+This predicts the measured channel ranking and is confirmed by a step-size sweep
+(identical generator, only $\Delta t$ varied):
+
+\begin{table}[t]
+\centering
+\caption{Noise floors and energy separation as a function of step size. The energy
+floor halves with $\Delta t$; the momentum and angular floors stay pinned at roundoff.}
+\label{tab:noisefloor}
+\begin{tabular}{rrrrr}
+\toprule
+$\Delta t$ & energy floor & angular floor & momentum floor & energy separation \\
+\midrule
+0.0100 & $6.02\mathrm{e}{-01}$ & $4.01\mathrm{e}{-16}$ & $2.88\mathrm{e}{-16}$ & 0.81 \\
+0.0050 & $\mathbf{2.65\mathrm{e}{-01}}$ & $5.06\mathrm{e}{-16}$ & $3.68\mathrm{e}{-16}$ & 1.84 \\
+0.0025 & $\mathbf{1.36\mathrm{e}{-01}}$ & $6.62\mathrm{e}{-16}$ & $4.39\mathrm{e}{-16}$ & \textbf{3.58} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Channel utility is a numerical property, not a physical one.} The critic
+therefore uses angular $+$ momentum by default, and excludes both the energy channel
+(weak floor) and the centre-of-mass channel (an exact invariant, but its variation is
+nearly uncorrelated with shape error --- measured IC win rate $16.7$--$24.2\%$, below
+chance).
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Why the obvious metric is wrong}
+\label{sec:metric}
+
+Reported ``critic quality'' is often a rank correlation pooled over all candidates. That
+metric conflates two effects, because candidates sampled with larger $\sigma$ are worse
+across the board. A critic that only detects the overall noise level scores well pooled
+while being unable to rank inside a group. Measured on the 6-body system (600 training
+ICs $=$ 4800 labelled candidates):
+
+\begin{table}[t]
+\centering
+\caption{Pooled versus within-group rank correlation. The supervised error regressor
+looks competitive pooled but has a within-group win rate of $53\%$ --- chance.}
+\label{tab:pooled}
+\begin{tabular}{lrrrr}
+\toprule
+Critic & pooled $\rho$ & \textbf{within-group $\rho$} & \textbf{IC win rate} & selected / random \\
+\midrule
+Conservation & $-0.7044$ & $\mathbf{-0.6881}$ & $\mathbf{84.0\%}$ & $\mathbf{0.637\times}$ \\
+Pairwise ranking (supervised) & $-0.4689$ & $-0.5786$ & $74.5\%$ & $0.656\times$ \\
+\textbf{Error regressor (supervised)} & $\mathbf{-0.6685}$ & $\mathbf{-0.3799}$ & $\mathbf{53.0\%}$ & $0.758\times$ \\
+Logistic fusion of all three & $-0.4509$ & $-0.6825$ & $83.5\%$ & $0.641\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A related effect: aligning the training target with the evaluation is worth more than
+model capacity. Identical architecture, two targets --- absolute error regression
+reaches an IC win rate of $\mathbf{47.5\%}$; IC-relative error regression reaches
+$\mathbf{86.5\%}$, a 39-point gap from the target alone.
+
+\subsection{Main results}
+\label{sec:main}
+
+\begin{table}[t]
+\centering
+\caption{figure-eight three-body ($N=3$, 2D), 50 test ICs, $K=8$. ``Separation'' is the
+relative gap between the critic's score on the true trajectory and on the $\sigma=0$
+candidate.}
+\label{tab:fig8}
+\begin{tabular}{lrrrrr}
+\toprule
+Critic & separation & within-group $\rho$ & IC win rate & sel./random & sel./oracle \\
+\midrule
+\textbf{Conservation (zero-shot)} & $\mathbf{8.7\mathrm{e}{11}}$ & $-0.9486$ & $\mathbf{100.0\%}$ & $\mathbf{0.250\times}$ & $\mathbf{1.03\times}$ \\
+HNN, energy drift (naive) & $0.076$ & $-0.5405$ & $50.0\%$ & $0.544\times$ & $2.24\times$ \\
+\textbf{HNN, equation residual} & $0.017$ & $\mathbf{-0.9524}$ & $\mathbf{100.0\%}$ & $\mathbf{0.250\times}$ & $\mathbf{1.03\times}$ \\
+\midrule
+random / oracle & --- & --- & 50.0\% / 100\% & $1.000\times$ / $0.243\times$ & $4.11\times$ / $1.00\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Kepler two-body ($N=2$, 2D), 50 test ICs, $K=8$.}
+\label{tab:kepler}
+\begin{tabular}{lrrrrr}
+\toprule
+Critic & separation & within-group $\rho$ & IC win rate & sel./random & sel./oracle \\
+\midrule
+\textbf{Conservation (zero-shot)} & $\mathbf{2.4\mathrm{e}{14}}$ & $-0.9495$ & $\mathbf{100.0\%}$ & $\mathbf{0.185\times}$ & $\mathbf{1.05\times}$ \\
+HNN, energy drift (naive) & $0.034$ & $-0.5705$ & $52.0\%$ & $0.463\times$ & $2.63\times$ \\
+\textbf{HNN, equation residual} & $0.058$ & $\mathbf{-0.9490}$ & $\mathbf{100.0\%}$ & $\mathbf{0.185\times}$ & $\mathbf{1.05\times}$ \\
+\midrule
+random / oracle & --- & --- & 50.0\% / 100\% & $1.000\times$ / $0.176\times$ & $5.68\times$ / $1.00\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The conservation critic ties the HNN exactly} on both systems --- identical
+selection error, identical win rate. The learned critic requires training an HNN; the
+conservation critic requires nothing.
+
+Note also the separation column: the conservation critic separates true from generated
+trajectories by $10^{11}$--$10^{14}$, the HNN by $\sim10^{-2}$. Yet the HNN still ranks
+correctly inside a group, because its residual varies monotonically with $\sigma$.
+Large absolute separation and good within-group ranking are different properties.
+
+\begin{table}[t]
+\centering
+\caption{6-body system, 5 seeds, 95\% CI (120 training ICs). The conservation critic's
+advantage over the supervised ranking critic has non-overlapping 95\% CIs on both
+splits.}
+\label{tab:6body}
+\begin{tabular}{lrrrr}
+\toprule
+Critic & ID within-group $\rho$ & ID win rate & OOD win rate & training samples \\
+\midrule
+\textbf{Conservation (zero-shot)} & $\mathbf{-0.6404\pm0.0459}$ & $\mathbf{82.8\%\pm3.3\%}$ & $\mathbf{84.7\%\pm1.8\%}$ & \textbf{0} \\
+Pairwise ranking (supervised) & $-0.5627\pm0.0471$ & $71.2\%\pm3.2\%$ & $72.2\%\pm2.5\%$ & 960 \\
+Absolute binary (naive) & $-0.4958\pm0.0768$ & $62.0\%\pm8.8\%$ & $67.0\%\pm7.3\%$ & 960 \\
+random & --- & 50.0\% & 50.0\% & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The numbers in Table~\ref{tab:6body} come from 120 training ICs. In
+Section~\ref{sec:metric} and Section~\ref{sec:retractions} the supervised critics were
+given 600 ICs (4800 labelled candidates) --- five times more --- and the conclusion is
+unchanged. We quote each experiment's own budget rather than a single figure.
+
+\subsection{Ablation over channel sets}
+\label{sec:ablation}
+
+Four settings (two generators $\times$ ID/OOD), reported as selected/random (lower is
+better):
+
+\begin{table}[t]
+\centering
+\caption{Channel-set ablation. The previously-used equal-weight sum of four channels is
+substantially suboptimal.}
+\label{tab:ablation}
+\begin{tabular}{lrrrr}
+\toprule
+Channel set & G\_A ID & G\_A OOD & G\_B ID & G\_B OOD \\
+\midrule
+angular & $0.640\times$ & $\mathbf{0.637\times}$ & $\mathbf{0.056\times}$ & $0.063\times$ \\
+\textbf{angular $+$ momentum (adopted)} & $0.640\times$ & $0.653\times$ & $\mathbf{0.056\times}$ & $\mathbf{0.059\times}$ \\
+four channels, equal weight (previous) & $0.629\times$ & $0.713\times$ & $0.067\times$ & $0.094\times$ \\
+energy only & $0.794\times$ & $0.828\times$ & $0.308\times$ & $0.194\times$ \\
+centre of mass only & $\mathbf{1.038\times}$ & $\mathbf{1.057\times}$ & $\mathbf{1.327\times}$ & $\mathbf{1.575\times}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On the stronger generator the old four-channel sum is $1.21\times$ of oracle where
+angular$+$momentum is $1.02\times$, and out of distribution the gap widens to
+$1.61\times$ versus $1.02\times$. The centre-of-mass channel is worse than chance on its
+own.
+
+\subsection{A negative result: synthetic failure modes are not comparable}
+\label{sec:taxonomy}
+
+Critic rankings are often measured on hand-built corruptions (add noise, swap in a bad
+integrator, freeze, splice, time-warp). We tested whether such a taxonomy is comparable
+to a real generator's failures. \textbf{It is not.}
+
+\paragraph{(a) Two of five corruptions cannot be calibrated.} Tuning severity so that
+each corruption's median RMSE matches the generator's ($0.01468$):
+
+\begin{table}[t]
+\centering
+\caption{Severity calibration. ``Lower bound'' means the corruption was made as mild as
+its parameterisation allows.}
+\label{tab:calib}
+\begin{tabular}{lrrl}
+\toprule
+Corruption & calibrated severity & achieved RMSE & verdict \\
+\midrule
+noise & $0.740$ & $0.01477$ & calibrated \\
+freeze & $0.428$ & $0.01342$ & calibrated \\
+warp & $0.302$ & $0.01342$ & calibrated \\
+\textbf{euler} & lower bound & $\mathbf{0.14127}$ & \textbf{$10\times$ too destructive} \\
+\textbf{splice} & lower bound & $\mathbf{0.59365}$ & \textbf{$40\times$ too destructive} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\texttt{splice} is worse than merely uncalibrated: it performs a discrete particle roll
+and its severity parameter has \textbf{no effect at all}. It is an artifact of the
+construction, not a failure mode.
+
+\paragraph{(b) The conservation fingerprints have different shape.}
+
+\begin{table}[t]
+\centering
+\caption{Separation of true from corrupted trajectories, per channel. The real
+generator's failure mode is breaking Newton's third law, which destroys angular and
+linear momentum conservation. Four of the five synthetic corruptions leave those
+quantities at $0.9$--$1.1$.}
+\label{tab:fingerprint}
+\begin{tabular}{lrrrrrr}
+\toprule
+Channel & noise & euler & freeze & splice & warp & \textbf{real generator} \\
+\midrule
+energy & $3.89$ & $0.00$ & $0.86$ & $0.98$ & $0.93$ & $\mathbf{1.02}$ \\
+angular & $7.5\mathrm{e}{15}$ & $3.1\mathrm{e}{10}$ & $0.95$ & $0.97$ & $1.13$ & $\mathbf{1.2\mathrm{e}{15}}$ \\
+momentum & $6.3\mathrm{e}{15}$ & $3.9\mathrm{e}{8}$ & $0.87$ & $0.96$ & $0.94$ & $\mathbf{1.9\mathrm{e}{16}}$ \\
+centre of mass & $1.10$ & $0.02$ & $0.85$ & $1.03$ & $1.03$ & $\mathbf{1.10}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Normalized fingerprint distances range from $7.4$ to $238$.
+
+\paragraph{Consequence.} No result in this paper is computed on a synthetic corruption
+set. All negative samples come from real learned generators. We recommend the
+calibration procedure above as a prerequisite for anyone using such a taxonomy.
+
+\subsection{Cross-generator check: the ranking depends on the generator}
+\label{sec:crossgen}
+
+The results above use a pairwise force model as the generator. A reviewer's first
+question is whether they are an artefact of that choice. We re-ran the comparison with a
+\textbf{Hamiltonian Neural Network used as the generator} \cite{greydanus2019hnn}, which
+has a fundamentally different inductive bias: it learns a black-box scalar $H(q,p)$ and
+derives the vector field from Hamilton's equations, so it is \emph{not}
+translation- or rotation-invariant, unlike a pairwise force model.
+
+\begin{table}[t]
+\centering
+\caption{HNN used as the \emph{generator}. The conservation critic's lead does not
+survive the change of generator.}
+\label{tab:crossgen}
+\begin{tabular}{llrrrr}
+\toprule
+System & Critic & within-group $\rho$ & IC win rate & sel./random & sel./oracle \\
+\midrule
+figure-eight & Conservation (zero-shot) & $-0.6881$ & $78.0\%$ & $0.864\times$ & $1.10\times$ \\
+figure-eight & \textbf{Pairwise ranking (supervised)} & $\mathbf{-0.8890}$ & $\mathbf{96.0\%}$ & $\mathbf{0.794\times}$ & $\mathbf{1.01\times}$ \\
+Kepler & Conservation (zero-shot) & $-0.8048$ & $\mathbf{98.0\%}$ & $0.574\times$ & $1.06\times$ \\
+Kepler & \textbf{Pairwise ranking (supervised)} & $\mathbf{-0.9014}$ & $96.0\%$ & $\mathbf{0.552\times}$ & $\mathbf{1.02\times}$ \\
+\midrule
+\multicolumn{2}{l}{random (figure-eight / Kepler)} & --- & 50.0\% & $1.000\times$ & $1.27\times$ / $1.84\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The conservation critic no longer leads.} On the figure-eight it is clearly
+behind ($78.0\%$ versus $96.0\%$); on Kepler the two are close with the supervised critic
+marginally ahead in selection error. Both remain far better than random
+($0.55$--$0.86\times$ versus $1.00\times$).
+
+The conservation fingerprint shows the HNN generator still breaks angular-momentum
+conservation severely (separation $2.4\times10^{13}$ and $7.3\times10^{12}$), so the
+critic's signal is not weakened.
+
+\paragraph{A candidate explanation, tested and rejected.}
+The conservation residual is a projection of the force error onto the symmetry generators
+(Eq.~\ref{eq:noether}), so one might expect the \emph{full} force error to carry strictly
+more information, with the HNN generator's advantage lying in structure that conservation
+cannot see. We tested this directly: for every candidate we measured the accumulated force
+error $\int\lVert a^{\text{gen}}-a^{\text{true}}\rVert\,dt$ along its own trajectory and
+correlated it, within each IC, with the true trajectory error.
+
+\begin{table}[t]
+\centering
+\caption{Tested explanation. Positive Spearman means the diagnostic predicts trajectory
+error. The full force error is a \emph{worse} predictor than the conservation residual in
+all four settings, so this diagnostic cannot support the ``invisible structure''
+explanation.}
+\label{tab:decomp}
+\begin{tabular}{lrrr}
+\toprule
+Setting & $\rho$(conservation) & $\rho$(force error) & gap \\
+\midrule
+figure-eight $\times$ pairwise & $+0.9524$ & $+0.1702$ & $-0.7821$ \\
+figure-eight $\times$ HNN & $+0.7768$ & $+0.1339$ & $-0.6429$ \\
+Kepler $\times$ pairwise & $+0.8173$ & $+0.1238$ & $-0.6935$ \\
+Kepler $\times$ HNN & $+0.7929$ & $+0.2083$ & $-0.5845$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The explanation does not hold.} The force-error magnitude is a far weaker
+predictor than the conservation residual everywhere, so nothing here supports attributing
+the HNN generator's advantage to information that conservation discards. Two reasons the
+diagnostic may simply be the wrong instrument, neither of which we separated: the force
+error is evaluated at the \emph{generated} positions, so a candidate that has drifted is
+compared in a different region of state space; and trajectory error is the \emph{second}
+time integral of $\delta a$, so oscillating force errors that largely cancel leave little
+trace --- a magnitude is not the right upper bound on usable information.
+
+We therefore leave the mechanism \textbf{unexplained}. What stands is the measurement:
+with an HNN generator the supervised critic is at least as good as the conservation
+critic. Only the proposed explanation failed.
+
+\paragraph{What this changes.} The claim must be stated per generator, not universally:
+
+\begin{quote}
+A zero-shot conservation critic is a \textbf{reliable but not universally optimal}
+supervision signal. For pairwise-force generators it leads the strongest supervised
+critic; for a Hamiltonian-parameterised generator it is matched or slightly beaten.
+\end{quote}
+
+This does not contradict the tie reported in Section~\ref{sec:main}: that compares
+\emph{critics} under a fixed pairwise-force generator, whereas this compares
+\emph{generators}. Together they place the conservation critic in the same band as the
+strongest learned supervision, with the ordering depending on the setting rather than
+following a general rule.
+
+\section{Limitations}
+
+\begin{enumerate}
+  \item \textbf{Generators are learned surrogate force models}, not diffusion or
+    autoregressive video models. The qualitative structure of the failures (breaking
+    equal-and-opposite forces) is plausible for any pairwise-parameterised model, but we
+    did not verify it on a large pretrained generative model.
+  \item \textbf{The generator's parameterisation changes the ranking.}
+    Section~\ref{sec:crossgen} shows that switching from a pairwise force model to a
+    Hamiltonian Neural Network removes the conservation critic's lead. The claim must be
+    stated per generator; we have two architectures, not a spectrum.
+  \item \textbf{Ground truth is always available} here, because the systems are
+    simulated. The selection task is therefore well-defined; in the field one normally
+    lacks $x^{\star}$. Our critic does not need $x^{\star}$ at \emph{use} time --- only
+    our \emph{evaluation} does.
+  \item \textbf{Three systems, all $N \leq 6$ and pairwise-central.} The noise-floor
+    argument relies on (i) pairwise central forces and (ii) a symplectic integrator. For
+    three-body forces or non-symplectic integrators the momentum and angular floors are
+    no longer automatically at roundoff.
+  \item \textbf{No accuracy comparison against published numbers.} The HNN baseline was
+    trained by us; we did not reproduce a published HNN result. The tie should be read
+    as ``our HNN implementation is a fair baseline'', not as a leaderboard claim.
+  \item \textbf{The critic is used only for selection.} We do not show that it improves
+    \emph{training} (e.g.\ as a reward or regulariser); that is untested.
+\end{enumerate}
+
+\section{Retractions}
+\label{sec:retractions}
+
+Three claims appeared in earlier internal drafts of this work. All are false, and the
+process of falsifying them produced the methodological results of
+Sections~\ref{sec:metric}, \ref{sec:ablation} and \ref{sec:taxonomy}.
+
+\paragraph{R1. ``The conservation critic is more robust out of distribution than a
+learned critic.''} False. On a family shift the two do not differ (conservation
+$+0.001$, learned $-0.005$, overlapping CIs). On a \emph{severity} shift toward subtler
+violations the conservation critic degrades \emph{more} ($-11.4$ points versus $-1.0$).
+Its advantage is absolute level and zero labelling cost, not distributional robustness.
+
+\paragraph{R2. ``Conservation and learned critics have complementary blind spots;
+combining them is consistently better.''} False. An \emph{optimally weighted} fusion
+(logistic regression over the critic scores, fitted on held-out training data) assigns
+the conservation critic the largest weight ($+1.635$), the supervised error regressor a
+\textbf{negative} weight ($-0.612$), and still ties the conservation critic alone
+($0.641\times$ versus $0.637\times$ ID; $0.608\times$ versus $0.614\times$ OOD). The
+signals are redundant, not complementary. An earlier version of this claim appeared to
+hold only because the ``learned'' critic was given conservation residuals as input
+features, making the conclusion true by construction.
+
+\paragraph{R3. ``Conservation critics can validate the Lumyn pipeline itself.''} False,
+for a structural reason: that pipeline integrates the true equations of motion, so its
+output \emph{is} a solution and the failure mode a validator would catch cannot occur. A
+real corruption/restoration experiment confirms this --- the validation layer's causal
+contribution is exactly zero, because it is never acted upon. A conservation critic is
+useful precisely when the generator's output is \emph{not} a solution, which is true of
+learned models and false of a physics integrator.
+
+\section{Conclusion}
+
+A critic built from conservation laws, requiring no training data and no labels, ties
+the strongest learned critics at selecting good candidates from a learned physical
+generator: 100\% within-group accuracy on standard benchmarks (matching a Hamiltonian
+Neural Network exactly), and 83--85\% on a 6-body family where a supervised
+pairwise-ranking critic trained on 960 labelled candidates reaches 71--72\%.
+
+The reason it works is numerical rather than physical. Conservation channels whose
+invariance is a structural property of the pairwise central force --- linear and angular
+momentum --- sit at a machine-precision floor and separate true from generated
+trajectories by ten or more orders of magnitude. The energy channel, conserved only to
+the integrator's truncation error, does not. Choosing channels by their noise floor,
+rather than by the physical prominence of the quantity, is what makes the critic work.
+
+We also report what does not work, because it constrains the claim: the critic is not
+more robust out of distribution, combining it with learned critics does not help, and
+synthetic failure taxonomies are not structurally comparable to real generator failures
+unless calibrated first.
+
+\begin{thebibliography}{9}
+
+\bibitem{chenciner2000}
+A.~Chenciner and R.~Montgomery.
+\newblock A remarkable periodic solution of the three-body problem in the case of equal
+masses.
+\newblock \emph{Annals of Mathematics}, 152(3):881--901, 2000.
+
+\bibitem{cranmer2020lNN}
+M.~Cranmer, S.~Greydanus, S.~Hoyer, P.~Battaglia, D.~Spergel, and S.~Ho.
+\newblock Lagrangian Neural Networks.
+\newblock \emph{arXiv:2003.04630}, 2020.
+
+\bibitem{greydanus2019hnn}
+S.~Greydanus, M.~Dzamba, and J.~Yosinski.
+\newblock Hamiltonian Neural Networks.
+\newblock \emph{Advances in Neural Information Processing Systems}, 2019.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Reproducibility}
+
+\begin{table}[h]
+\centering
+\caption{Result-to-script map.}
+\label{tab:repro}
+\begin{tabular}{ll}
+\toprule
+Result & Script \\
+\midrule
+Selection metrics, 6-body, 5 seeds & \texttt{experiments/experiment\_h\_benchmark.py} \\
+Channel ablation & \texttt{experiments/experiment\_e\_channel\_combos.py} \\
+Standard benchmarks $+$ HNN & \texttt{experiments/experiment\_k\_hnn\_equation\_critic.py} \\
+Strong supervised baselines & \texttt{experiments/experiment\_c\_strong\_baselines.py} \\
+Failure-mode comparability & \texttt{experiments/experiment\_i\_failure\_modes.py} \\
+Noise-floor sweep & \texttt{experiments/experiment\_g\_error\_functionals.py} \\
+HNN fairness diagnostics & \texttt{experiments/diagnose\_hnn\_*.py} \\
+Channel-set regression tests & \texttt{tests/test\_conservation\_critic.py} (18 tests) \\
+Checker-defect regression tests & \texttt{tests/test\_conservation\_checker.py} (11 tests) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Test suite at the time of writing: \textbf{108 tests, 0 failures} (1 optional-dependency
+skip).
+
+\end{document}
