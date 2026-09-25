@@ -1,0 +1,14 @@
+# ---- 换行统一 ----
+# 仓库存 LF，检出也按 LF（本项目全是 .py/.md/.tex，无 .sh/.bat，Windows 上安全）
+* text=auto eol=lf
+
+# ---- 二进制：不做任何文本转换 ----
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.mp4  binary
+*.npz  binary
+*.fits binary
+*.h5   binary
+*.pdf  binary
