@@ -1,4 +1,4 @@
-﻿# ---- Python ----
+# ---- Python ----
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -27,3 +27,9 @@ desktop.ini
 
 # ---- 由示例脚本生成，不应入库 ----
 diff_figure.png
+
+# ---- 论文构建产物（可复现，不入库） ----
+lumyn/docs/paper/build.log
+*.aux
+*.out
+*.log
