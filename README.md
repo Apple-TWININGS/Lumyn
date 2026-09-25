@@ -1,5 +1,19 @@
 # Lumyn
 
+<!-- status badges: all static, because everything they claim is machine-checked by
+     scripts/verify_readme.py. No CI badge is shown because no CI workflow exists. -->
+
+**A physically-grounded scene generation engine — simulate first, render second.**
+
+[![tests](https://img.shields.io/badge/tests-113%20passing-brightgreen)](#42-tests)
+[![engine](https://img.shields.io/badge/generation-Barnes--Hut%20N--body-blue)](#2-what-this-is)
+[![result](https://img.shields.io/badge/result-a%20tie%2C%20stated%20as%20a%20tie-orange)](#3-results)
+[![README](https://img.shields.io/badge/README-machine--checked-informational)](scripts/verify_readme.py)
+[![status](https://img.shields.io/badge/domain_research-artefact-lightgrey)](#22-research-zero-shot-conservation-critics)
+
+**Contributing?** Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first — the short version is that
+this README may only state what has been verified, and `scripts/verify_readme.py` enforces it.
+
 A physically-grounded scene generation engine — simulate the physics first, render
 second — and the artefact for one research question: *can a zero-shot critic built from
 conservation laws replace a learned one?*
