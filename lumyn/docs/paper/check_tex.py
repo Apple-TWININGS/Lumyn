@@ -18,6 +18,14 @@ import re
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 cp936/GBK，下面的 ✅/❌ 会让 print() 抛 UnicodeEncodeError，
+# 表现为「检查逻辑全过、最后打印时崩掉」。这里把 stdout 切到 UTF-8。
+# Python 3.7+ 有 reconfigure；没有的环境（或 stdout 被重定向为不可包装对象）静默跳过。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, OSError):
+    pass
+
 
 def strip_comments(text: str) -> str:
     """去掉行注释（未转义的 %），保留行结构。"""
